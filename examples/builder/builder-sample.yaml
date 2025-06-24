@@ -1,0 +1,6 @@
+apiVersion: kaito.sh/v1beta1
+kind: Builder
+metadata:
+  name: builder-sample
+spec:
+  model: huggingface/llama-2-7b-chat-hf

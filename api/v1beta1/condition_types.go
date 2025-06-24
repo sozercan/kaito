@@ -26,4 +26,7 @@ const (
 	//For inference, the "True" condition means the inference service is ready to serve requests.
 	//For fine tuning, the "True" condition means the tuning job completes successfully.
 	WorkspaceConditionTypeSucceeded ConditionType = ConditionType("WorkspaceSucceeded")
+
+	// BuilderConditionTypeSucceeded is the Builder state that indicates the build process has completed.
+	BuilderConditionTypeSucceeded ConditionType = ConditionType("BuilderSucceeded")
 )

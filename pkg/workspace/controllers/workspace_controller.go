@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -347,19 +346,19 @@ func (c *WorkspaceReconciler) applyWorkspaceResource(ctx context.Context, wObj *
 	}
 
 	// Ensure all gpu plugins are running successfully.
-	if strings.Contains(wObj.Resource.InstanceType, consts.GpuSkuPrefix) { // GPU skus
-		for i := range selectedNodes {
-			err = c.ensureNodePlugins(ctx, wObj, selectedNodes[i])
-			if err != nil {
-				if updateErr := c.updateStatusConditionIfNotMatch(ctx, wObj, kaitov1beta1.ConditionTypeResourceStatus, metav1.ConditionFalse,
-					"workspaceResourceStatusFailed", err.Error()); updateErr != nil {
-					klog.ErrorS(updateErr, "failed to update workspace status", "workspace", klog.KObj(wObj))
-					return updateErr
-				}
-				return err
-			}
-		}
-	}
+	// if strings.Contains(wObj.Resource.InstanceType, consts.GpuSkuPrefix) { // GPU skus
+	// 	for i := range selectedNodes {
+	// 		err = c.ensureNodePlugins(ctx, wObj, selectedNodes[i])
+	// 		if err != nil {
+	// 			if updateErr := c.updateStatusConditionIfNotMatch(ctx, wObj, kaitov1beta1.ConditionTypeResourceStatus, metav1.ConditionFalse,
+	// 				"workspaceResourceStatusFailed", err.Error()); updateErr != nil {
+	// 				klog.ErrorS(updateErr, "failed to update workspace status", "workspace", klog.KObj(wObj))
+	// 				return updateErr
+	// 			}
+	// 			return err
+	// 		}
+	// 	}
+	// }
 
 	if err = c.updateStatusConditionIfNotMatch(ctx, wObj,
 		kaitov1beta1.ConditionTypeNodeClaimStatus, metav1.ConditionTrue,

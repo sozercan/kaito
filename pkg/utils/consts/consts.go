@@ -10,6 +10,8 @@ const (
 	WorkspaceFinalizer = "workspace.finalizer.kaito.sh"
 	// RAGEngineFinalizer is used to make sure that ragengine controller handles garbage collection.
 	RAGEngineFinalizer            = "ragengine.finalizer.kaito.sh"
+	// BuilderFinalizer is used to make sure that builder controller handles garbage collection.
+	BuilderFinalizer              = "builder.finalizer.kaito.sh"
 	DefaultReleaseNamespaceEnvVar = "RELEASE_NAMESPACE"
 	AzureCloudName                = "azure"
 	AWSCloudName                  = "aws"
