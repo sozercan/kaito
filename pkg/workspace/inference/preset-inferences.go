@@ -35,6 +35,7 @@ import (
 	"github.com/kaito-project/kaito/pkg/utils/resources"
 	"github.com/kaito-project/kaito/pkg/workspace/manifests"
 	metadata "github.com/kaito-project/kaito/presets/workspace/models"
+	"github.com/kaito-project/kaito/pkg/utils/scheduling"
 )
 
 const (
@@ -339,4 +340,61 @@ func getDistributedInferenceProbe(probeType probeType, wObj *v1beta1.Workspace, 
 func GetBaseImageName() string {
 	presetObj := metadata.MustGet("base")
 	return utils.GetPresetImageName(presetObj.Name, presetObj.Tag)
+}
+
+// enhanceInferenceWithDynamicScheduling enhances the inference generation using dynamic scheduling
+func enhanceInferenceWithDynamicScheduling(ctx context.Context, workspaceObj *v1beta1.Workspace, 
+	model pkgmodel.Model, kubeClient client.Client) (*InferenceEnhancement, error) {
+	
+	// Get the preset name
+	presetName := string(workspaceObj.Inference.Preset.Name)
+	
+	// Create dynamic scheduler
+	dynamicScheduler := scheduling.NewDynamicScheduler(kubeClient)
+	
+	// Get runtime name
+	runtimeName := v1beta1.GetWorkspaceRuntimeName(workspaceObj)
+	
+	// Create model config
+	modelConfig := scheduling.CreateModelConfigFromPreset(presetName, runtimeName)
+	
+	// If we have worker nodes, use them; otherwise use instance type info
+	var nodeNames []string
+	if len(workspaceObj.Status.WorkerNodes) > 0 {
+		nodeNames = workspaceObj.Status.WorkerNodes
+	} else {
+		// For new workspaces, simulate with instance type
+		nodeNames = []string{"simulated-node"}
+	}
+	
+	// Get optimal scheduling
+	result, err := dynamicScheduler.GetOptimalScheduling(ctx, presetName, modelConfig, nodeNames)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get optimal scheduling: %w", err)
+	}
+	
+	return &InferenceEnhancement{
+		VRAMRequirement:     result.VRAMRequirement,
+		GPUCapacity:         result.GPUCapacity,
+		OptimalGPUCount:     result.RecommendedGPUCount,
+		OptimalNodeCount:    len(result.RecommendedNodes),
+		Strategy:            result.Strategy,
+		MemoryUtilization:   result.MemoryUtilization,
+		Warnings:            result.Warnings,
+		Recommendations:     result.Recommendations,
+		FallbackOptions:     result.FallbackOptions,
+	}, nil
+}
+
+// InferenceEnhancement contains enhanced inference information from dynamic scheduling
+type InferenceEnhancement struct {
+	VRAMRequirement     *scheduling.VRAMRequirement
+	GPUCapacity         *scheduling.GPUCapacity
+	OptimalGPUCount     int
+	OptimalNodeCount    int
+	Strategy            string
+	MemoryUtilization   float64
+	Warnings            []string
+	Recommendations     []string
+	FallbackOptions     []*scheduling.FallbackOption
 }

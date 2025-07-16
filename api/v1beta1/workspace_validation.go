@@ -24,15 +24,17 @@ import (
 	"github.com/distribution/reference"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 	"knative.dev/pkg/apis"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kaito-project/kaito/pkg/model"
 	"github.com/kaito-project/kaito/pkg/utils"
 	"github.com/kaito-project/kaito/pkg/utils/consts"
 	"github.com/kaito-project/kaito/pkg/utils/plugin"
+	"github.com/kaito-project/kaito/pkg/utils/scheduling"
 )
 
 const (
@@ -376,10 +378,10 @@ func (r *ResourceSpec) validateCreateWithInference(inference *InferenceSpec, byp
 					errs = errs.Also(apis.ErrInvalidValue(
 						fmt.Sprintf(
 							"Insufficient total GPU memory: Instance type %s has a total of %s, but preset %s requires at least %s",
-							instanceType,
-							machineTotalGPUMem.String(),
-							presetName,
-							modelTotalGPUMemory.String(),
+						 instanceType,
+						 machineTotalGPUMem.String(),
+						 presetName,
+						 modelTotalGPUMemory.String(),
 						),
 						"instanceType",
 					))
@@ -399,7 +401,17 @@ func (r *ResourceSpec) validateCreateWithInference(inference *InferenceSpec, byp
 		provider := os.Getenv("CLOUD_PROVIDER")
 		// Check for other instance types pattern matches if cloud provider is Azure
 		if provider != consts.AzureCloudName || (!strings.HasPrefix(instanceType, N_SERIES_PREFIX) && !strings.HasPrefix(instanceType, D_SERIES_PREFIX)) {
-			errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("Unsupported instance type %s. Supported SKUs: %s", instanceType, skuHandler.GetSupportedSKUs()), "instanceType"))
+			// For unknown instance types, try dynamic scheduling validation
+			if presetName != "" {
+				ctx := context.TODO() // In a real implementation, this would be passed from the caller
+				if r.tryDynamicSchedulingValidation(ctx, inference, runtime, instanceType, presetName) {
+					klog.Infof("Dynamic scheduling validation passed for unknown instance type %s with preset %s", instanceType, presetName)
+				} else {
+					errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("Unsupported instance type %s. Supported SKUs: %s", instanceType, skuHandler.GetSupportedSKUs()), "instanceType"))
+				}
+			} else {
+				errs = errs.Also(apis.ErrInvalidValue(fmt.Sprintf("Unsupported instance type %s. Supported SKUs: %s", instanceType, skuHandler.GetSupportedSKUs()), "instanceType"))
+			}
 		}
 	}
 
@@ -521,4 +533,97 @@ func validateDuplicateName(adapters []AdapterSpec, nameMap map[string]bool) (err
 		}
 	}
 	return errs
+}
+
+// validateCreateWithDynamicScheduling validates resource requirements using dynamic scheduling
+func (r *ResourceSpec) validateCreateWithDynamicScheduling(ctx context.Context, inference *InferenceSpec, bypassResourceChecks bool, runtime model.RuntimeName, kubeClient client.Client) (errs *apis.FieldError) {
+	var presetName string
+	if inference.Preset != nil {
+		presetName = strings.ToLower(string(inference.Preset.Name))
+		if !plugin.IsValidPreset(presetName) {
+			return errs
+		}
+	}
+
+	// Create dynamic scheduler
+	dynamicScheduler := scheduling.NewDynamicScheduler(kubeClient)
+	
+	// Create model config from preset
+	modelConfig := scheduling.CreateModelConfigFromPreset(presetName, runtime)
+	
+	// For validation, we create a hypothetical node scenario
+	// In a real implementation, you'd pass actual node names from workspace status
+	nodeNames := []string{"validation-node"} // This would be replaced with actual node names
+	
+	// Perform dynamic scheduling analysis
+	result, err := dynamicScheduler.CanScheduleModel(ctx, presetName, modelConfig, nodeNames)
+	if err != nil {
+		if !bypassResourceChecks {
+			errs = errs.Also(apis.ErrGeneric(fmt.Sprintf("Failed to perform dynamic scheduling analysis: %v", err), "instanceType"))
+		}
+		return errs
+	}
+
+	// If scheduling is not feasible, provide detailed error information
+	if !result.Feasible {
+		errorMsg := fmt.Sprintf("Model %s cannot be scheduled with current configuration. Required: %.2f GiB, Available: %.2f GiB, Min GPUs: %d", 
+			presetName, 
+			result.VRAMRequirement.TotalGPUMemoryGiB, 
+			result.GPUCapacity.TotalGPUMemoryGiB, 
+			result.VRAMRequirement.MinGPUCount)
+		
+		if bypassResourceChecks {
+			klog.Warningf("Bypassing resource check: %s", errorMsg)
+		} else {
+			errs = errs.Also(apis.ErrInvalidValue(errorMsg, "instanceType"))
+		}
+	}
+
+	// Add warnings for high utilization
+	if result.MemoryUtilization > 90 {
+		klog.Warningf("High memory utilization (%.1f%%) detected for model %s", result.MemoryUtilization, presetName)
+	}
+
+	// Log recommendations
+	for _, recommendation := range result.Recommendations {
+		klog.Infof("Recommendation for model %s: %s", presetName, recommendation)
+	}
+
+	return errs
+}
+
+// tryDynamicSchedulingValidation attempts to use dynamic scheduling as a fallback
+func (r *ResourceSpec) tryDynamicSchedulingValidation(ctx context.Context, inference *InferenceSpec, runtime model.RuntimeName, instanceType string, presetName string) bool {
+	// Create a basic model config for validation
+	modelConfig := scheduling.CreateModelConfigFromPreset(presetName, runtime)
+	
+	// For validation without actual nodes, we simulate based on instance type
+	// This is a simplified approach - in real deployment, actual node information would be used
+	skuHandler, err := utils.GetSKUHandler()
+	if err != nil {
+		return false
+	}
+	
+	skuConfig := skuHandler.GetGPUConfigBySKU(instanceType)
+	if skuConfig == nil {
+		return false
+	}
+	
+	// Create a simulated GPU capacity based on SKU
+	gpuCapacity := &scheduling.GPUCapacity{
+		TotalGPUCount:     skuConfig.GPUCount * (*r.Count),
+		TotalGPUMemoryGiB: float64(skuConfig.GPUMemGB * (*r.Count)),
+		PerGPUMemoryGiB:   float64(skuConfig.GPUMemGB) / float64(skuConfig.GPUCount),
+		GPUNodes:          make(map[string]*scheduling.GPUInfo),
+	}
+	
+	// Calculate VRAM requirement using dynamic calculator
+	vramCalculator := scheduling.NewVRAMCalculator()
+	vramReq, err := vramCalculator.CalculateVRAMRequirement(ctx, presetName, modelConfig)
+	if err != nil {
+		return false
+	}
+	
+	// Check if the requirement can be satisfied
+	return gpuCapacity.CanSatisfyRequirement(vramReq)
 }

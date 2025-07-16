@@ -1,0 +1,40 @@
+apiVersion: kaito.sh/v1beta1
+kind: Workspace
+metadata:
+  name: dynamic-llama-7b
+  namespace: default
+spec:
+  inference:
+    preset:
+      name: llama-7b
+  resource:
+    instanceType: "auto"  # Dynamic scheduling will choose optimal instance type
+---
+apiVersion: kaito.sh/v1beta1
+kind: Workspace
+metadata:
+  name: dynamic-phi-3
+  namespace: default
+spec:
+  inference:
+    preset:
+      name: phi-3-mini
+  resource:
+    instanceType: "auto"
+---
+apiVersion: kaito.sh/v1beta1
+kind: Workspace
+metadata:
+  name: dynamic-custom-model
+  namespace: default
+spec:
+  inference:
+    template:
+      spec:
+        image: my-custom-model:latest
+        env:
+        - name: MODEL_NAME
+          value: "custom-llama-7b"
+  resource:
+    instanceType: "auto"
+    count: 2  # Explicit GPU count for custom models
